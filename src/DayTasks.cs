@@ -64,7 +64,7 @@ public class DayTasks : Form {
     bool readFailed;
     IntPtr desktop;
     DesktopShadow shadow;
-    byte glassAlpha=245;
+    byte glassAlpha=220;
     Point dragStart, dragOrigin;
     readonly string positionPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"Данные","позиция.txt");
     delegate bool EnumWindowProc(IntPtr hwnd,IntPtr param);
@@ -165,18 +165,6 @@ public class DayTasks : Form {
     }
     protected override void OnPaintBackground(PaintEventArgs e) {
         if(IsGlass) GlassPaint.Background(this,e.Graphics); else base.OnPaintBackground(e);
-    }
-    protected override void OnPaint(PaintEventArgs e) {
-        base.OnPaint(e); if(!IsGlass) return;
-        e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
-        using(var path=RoundedPanel.Shape(Width,Height,22)) {
-            using(var sheen=new LinearGradientBrush(ClientRectangle,Color.FromArgb(245,255,255,255),Color.FromArgb(100,66,90,145),70f))
-            using(var pen=new Pen(sheen,2f)) e.Graphics.DrawPath(pen,path);
-        }
-        using(var path=RoundedPanel.Shape(Width-4,Height-4,20)) {
-            using(var matrix=new Matrix()) { matrix.Translate(2,2); path.Transform(matrix); }
-            using(var pen=new Pen(Color.FromArgb(80,255,255,255),1f)) e.Graphics.DrawPath(pen,path);
-        }
     }
     protected override void OnLocationChanged(EventArgs e) {
         base.OnLocationChanged(e); if(desktop!=IntPtr.Zero && shadow!=null) { shadow.Update(Handle,desktop,Width,Height); WallpaperBackdrop.Refresh(this); RefreshGlassInput(); Invalidate(true); }
@@ -284,7 +272,7 @@ public class DayTasks : Form {
         count.Text=data.Tasks.Count==0 ? "Ваш день начинается здесь" : "Готово "+done+" из "+data.Tasks.Count;
         list.SuspendLayout(); while(list.Controls.Count>0) { var c=list.Controls[0]; list.Controls.Remove(c); c.Dispose(); }
         if(data.Tasks.Count==0) list.Controls.Add(LabelAt("Добавьте первое дело.\nДаже маленький шаг — это прогресс.",0,0,360,80,new Font("Segoe UI",11),Muted));
-        foreach(TaskItem task in data.Tasks) {
+        foreach(TaskItem task in OrderedTasks(data)) {
             var row=new RoundedPanel { Size=new Size(352,68),BackColor=Card,Margin=new Padding(0,0,0,9) };
             var check=new TaskCheck(task.Done,Card,Muted,Accent,Bg) { Location=new Point(12,20),Enabled=!readFailed };
             row.Controls.Add(check);
@@ -296,9 +284,14 @@ public class DayTasks : Form {
                 if(!Save()) { task.Done=old; task.CompletedAt=oldTime; } RefreshTasks();
             };
             remove.Click+=delegate { int index=data.Tasks.IndexOf(task); data.Tasks.Remove(task); if(!Save()) data.Tasks.Insert(index,task); RefreshTasks(); };
-            list.Controls.Add(row);
+            row.Tag=task.Id; list.Controls.Add(row);
         }
         list.ResumeLayout();
+    }
+    static List<TaskItem> OrderedTasks(TaskData source) {
+        var ordered=source.Tasks.FindAll(delegate(TaskItem item) { return !item.Done; });
+        ordered.AddRange(source.Tasks.FindAll(delegate(TaskItem item) { return item.Done; }));
+        return ordered;
     }
     [STAThread] static int Main(string[] args) {
         Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
@@ -340,7 +333,7 @@ public class DayTasks : Form {
             using(var window=new DayTasks(true,"glass")) {
                 window.Show(); window.AttachToDesktop(); Application.DoEvents();
                 uint key,flags; byte alpha;
-                if(!GetLayeredWindowAttributes(window.Handle,out key,out alpha,out flags) || alpha!=245) throw new Exception("Glass opacity was not applied");
+                if(!GetLayeredWindowAttributes(window.Handle,out key,out alpha,out flags) || alpha!=220) throw new Exception("Glass opacity was not applied");
                 if(window.shadow==null || !window.shadow.Visible || !window.shadow.AlignedWith(window.Handle)) throw new Exception("Shadow visibility or position");
                 window.ApplyTheme(FindPalette("blue")); Application.DoEvents();
                 if(window.shadow!=null || (GetWindowLong(window.Handle,-20)&0x80000)!=0) throw new Exception("Opaque theme did not reset transparency");
@@ -348,7 +341,7 @@ public class DayTasks : Form {
                 if(window.shadow==null || !window.shadow.Visible) throw new Exception("Shadow did not return");
                 window.Close();
             }
-            File.WriteAllText(Path.Combine(folder,"effects-result.txt"),"PASS: frosted wallpaper, native opacity 245/255, visible aligned shadow, theme reset, shadow restoration"); return 0;
+            File.WriteAllText(Path.Combine(folder,"effects-result.txt"),"PASS: frosted wallpaper, native opacity 220/255, visible aligned shadow, theme reset, shadow restoration"); return 0;
         } catch(Exception ex) { File.WriteAllText(Path.Combine(folder,"effects-result.txt"),ex.ToString()); return 1; }
     }
     static int SelfTest(string folder) {
@@ -367,6 +360,10 @@ public class DayTasks : Form {
                     if(window.BackColor!=theme.Bg || (!window.IsGlass && window.input.BackColor!=theme.Card) || window.input.ForeColor!=theme.Ink) throw new Exception("Theme colors");
                     if(window.input.Text!="Не потерять черновик" || window.data.Tasks.Count!=taskCount) throw new Exception("Theme changed tasks or draft");
                 }
+                window.data.Tasks[0].Done=true; window.RefreshTasks();
+                if((string)window.list.Controls[0].Tag!=window.data.Tasks[1].Id || (string)window.list.Controls[1].Tag!=window.data.Tasks[0].Id) throw new Exception("Completed task did not move below active task");
+                window.data.Tasks[0].Done=false; window.RefreshTasks();
+                if((string)window.list.Controls[0].Tag!=window.data.Tasks[0].Id) throw new Exception("Unchecked task did not return to active group");
             }
             Directory.CreateDirectory(folder); var d=new TaskData(); DateTime today=new DateTime(2026,10,14);
             d.Tasks.Add(new TaskItem { Text="Остаётся" }); d.Tasks.Add(new TaskItem { Text="Вчера",Done=true,CompletedAt=today.AddDays(-1).AddHours(12) });
@@ -380,7 +377,7 @@ public class DayTasks : Form {
             if(Storage.Clean(loaded,today.AddDays(3).AddHours(10))!=1 || loaded.Tasks[0].Done) throw new Exception("Offline rollover");
             loaded.Tasks.Add(new TaskItem { Text="Отмена отметки",Done=false,CompletedAt=today });
             if(Storage.Clean(loaded,today.AddDays(5))!=0) throw new Exception("Unchecked task");
-            File.WriteAllText(Path.Combine(folder,"test-result.txt"),"PASS: boundary, rollover, persistence, backup, offline cleanup, unchecked tasks"); return 0;
+            File.WriteAllText(Path.Combine(folder,"test-result.txt"),"PASS: boundary, rollover, persistence, backup, offline cleanup, completed-task grouping and undo"); return 0;
         } catch(Exception ex) { File.WriteAllText(Path.Combine(folder,"test-result.txt"),ex.ToString()); return 1; }
     }
 }
@@ -394,8 +391,8 @@ class RoundedPanel : Panel {
         g.SmoothingMode=SmoothingMode.AntiAlias;
         var form=FindForm() as DayTasks; bool light=form!=null && form.LightGlass;
         using(var path=Shape(Width,Height,16)) {
-            using(var fill=new LinearGradientBrush(ClientRectangle,Color.FromArgb(light ? 60 : 24,255,255,255),Color.FromArgb(light ? 20 : 28,12,24,30),70f)) g.FillPath(fill,path);
-            using(var edge=new Pen(Color.FromArgb(light ? 170 : 100,255,255,255),1f)) g.DrawPath(edge,path);
+            using(var fill=new LinearGradientBrush(ClientRectangle,Color.FromArgb(light ? 35 : 12,255,255,255),Color.FromArgb(light ? 12 : 18,12,24,30),70f)) g.FillPath(fill,path);
+            using(var edge=new Pen(Color.FromArgb(light ? 75 : 45,255,255,255),1f)) g.DrawPath(edge,path);
         }
     }
     protected override void OnPaintBackground(PaintEventArgs e) {
@@ -414,8 +411,8 @@ static class GlassPaint {
         WallpaperBackdrop.Draw(control,g);
         Point origin=control.PointToScreen(Point.Empty),root=form.PointToScreen(Point.Empty);
         Rectangle bounds=new Rectangle(root.X-origin.X,root.Y-origin.Y,form.Width,form.Height);
-        using(var tint=new SolidBrush(Color.FromArgb(form.LightGlass ? 170 : 120,form.GlassTint))) g.FillRectangle(tint,bounds);
-        using(var sheen=new LinearGradientBrush(bounds,Color.FromArgb(22,255,255,255),Color.FromArgb(22,0,0,0),80f)) g.FillRectangle(sheen,bounds);
+        using(var tint=new SolidBrush(Color.FromArgb(form.LightGlass ? 90 : 55,form.GlassTint))) g.FillRectangle(tint,bounds);
+        using(var sheen=new LinearGradientBrush(bounds,Color.FromArgb(10,255,255,255),Color.FromArgb(12,0,0,0),80f)) g.FillRectangle(sheen,bounds);
         var state=g.Save();
         var parent=control.Parent as RoundedPanel;
         if(parent!=null) { state=g.Save(); g.TranslateTransform(-control.Left,-control.Top); parent.PaintGlass(g); g.Restore(state); }
@@ -438,7 +435,7 @@ class SoftButton : Button {
             if(form!=null && form.IsGlass) {
                 Color top=Color.FromArgb(Text=="+" ? 115 : 35,255,255,255),bottom=Color.FromArgb(35,20,35,45);
                 using(var fill=new LinearGradientBrush(ClientRectangle,top,bottom,90f)) e.Graphics.FillPath(fill,path);
-                using(var border=new Pen(Color.FromArgb(220,255,255,255),1)) e.Graphics.DrawPath(border,path);
+                using(var border=new Pen(Color.FromArgb(75,255,255,255),1)) e.Graphics.DrawPath(border,path);
             } else { using(var brush=new SolidBrush(BackColor)) e.Graphics.FillPath(brush,path); }
         }
         if(Text=="×" || Text=="+") {
