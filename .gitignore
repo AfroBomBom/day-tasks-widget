@@ -1,0 +1,14 @@
+**/Данные/
+**/Data/
+work/
+bin/
+obj/
+*.tmp
+*.bak
+*.user
+*.suo
+.vs/
+.env
+.env.*
+*.log
+
