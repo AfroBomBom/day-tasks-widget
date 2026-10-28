@@ -14,6 +14,7 @@ using System.Runtime.InteropServices;
     public bool Done;
     public bool Important=true;
     public bool Urgent;
+    public bool InMatrix;
     public DateTime CompletedAt;
 }
 [Serializable] public class TaskData { public List<TaskItem> Tasks = new List<TaskItem>(); }
@@ -64,13 +65,16 @@ public class DayTasks : Form {
     FlowLayoutPanel[] quadrants=new FlowLayoutPanel[4];
     Button listTab,matrixTab;
     Label carryNote,cleanupNote;
+    Label entryHint;
     bool matrixView;
     static readonly string[] QuadrantNames={"Сделать сейчас","Запланировать","Делегировать","Отложить"};
-    static int Quadrant(TaskItem task) { return task.Important ? (task.Urgent ? 0 : 1) : (task.Urgent ? 2 : 3); }
+    static int Quadrant(TaskItem task) { return !task.InMatrix ? -1 : task.Important ? (task.Urgent ? 0 : 1) : (task.Urgent ? 2 : 3); }
+    static void SetQuadrant(TaskItem task,int target) { task.InMatrix=target>=0; if(target>=0) { task.Important=target<2; task.Urgent=target==0 || target==2; } }
     TextBox input;
     Label count, date;
     System.Windows.Forms.Timer timer;
     bool readFailed;
+    Func<bool> saveOverride;
     IntPtr desktop;
     DesktopShadow shadow;
     byte glassAlpha=220;
@@ -99,18 +103,18 @@ public class DayTasks : Form {
         else { try { theme=File.ReadAllText(themePath).Trim(); } catch { } }
         palette=FindPalette(theme);
         Font = new Font("Segoe UI", 10); BackColor = Bg; ForeColor = Ink;
-        Text = "Дела на день"; FormBorderStyle = FormBorderStyle.None; ClientSize = new Size(410, 606);
+        Text = "Дела на день"; FormBorderStyle = FormBorderStyle.None; ClientSize = new Size(600, 606);
         StartPosition = FormStartPosition.Manual;
         Rectangle area=Screen.PrimaryScreen.WorkingArea;
         Location=new Point(area.Right-Width-24,area.Top+30);
         ShowInTaskbar = false; MinimizeBox = false; MaximizeBox = false;
         Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
-        var header = new BackdropPanel { Location = new Point(2,2), Size = new Size(406,104), BackColor = Bg };
+        var header = new BackdropPanel { Location = new Point(2,2), Size = new Size(596,104), BackColor = Bg };
         Controls.Add(header);
         var title = LabelAt("Дела на день", 22, 24, 310, 35, new Font("Segoe UI", 19, FontStyle.Bold), Ink);
         header.Controls.Add(title);
         date = LabelAt("", 24, 68, 220, 26, new Font("Segoe UI",9), Muted); header.Controls.Add(date);
-        var themes=ButtonAt("Оформление ▾",252,64,136,30,Card,Ink); themes.Font=new Font("Segoe UI",9); header.Controls.Add(themes);
+        var themes=ButtonAt("Оформление ▾",442,64,136,30,Card,Ink); themes.Font=new Font("Segoe UI",9); header.Controls.Add(themes);
         themes.Click+=delegate {
             var menu=new ContextMenuStrip { BackColor=Card,ForeColor=Ink,Font=new Font("Segoe UI",10),ShowImageMargin=false,ShowCheckMargin=true };
             foreach(Palette choice in Palettes) {
@@ -134,36 +138,45 @@ public class DayTasks : Form {
         foreach(Control control in new Control[] { header,title,date }) {
             control.MouseDown+=startDrag; control.MouseMove+=moveDrag; control.MouseUp+=endDrag;
         }
-        var close=ButtonAt("×",365,22,26,28,Card,Muted); header.Controls.Add(close); close.Click+=delegate { Close(); };
-        var entry = new RoundedPanel { Location = new Point(22,115), Size = new Size(366,51), BackColor = Card };
+        var close=ButtonAt("×",555,22,26,28,Card,Muted); header.Controls.Add(close); close.Click+=delegate { Close(); };
+        var entry = new RoundedPanel { Location = new Point(22,115), Size = new Size(556,51), BackColor = Card };
         Controls.Add(entry);
-        input = new TextBox { BorderStyle = BorderStyle.None, BackColor = Card, ForeColor = Ink, Location = new Point(13,15), Size = new Size(290,27), Font = new Font("Segoe UI",11), MaxLength = 500 };
+        input = new TextBox { BorderStyle = BorderStyle.None, BackColor = Card, ForeColor = Ink, Location = new Point(13,15), Size = new Size(480,27), Font = new Font("Segoe UI",11), MaxLength = 500 };
         entry.Controls.Add(input);
-        var add = ButtonAt("+",315,7,42,37,Accent,IsGlass ? Ink : Bg); add.Font = new Font("Segoe UI",20); entry.Controls.Add(add);
+        var add = ButtonAt("+",505,7,42,37,Accent,IsGlass ? Ink : Bg); add.Font = new Font("Segoe UI",20); entry.Controls.Add(add);
         add.Click += delegate { AddTask(); };
         input.KeyDown += delegate(object sender, KeyEventArgs e) { if(e.KeyCode == Keys.Enter) { e.SuppressKeyPress=true; AddTask(); } };
-        Controls.Add(LabelAt("Напишите дело и нажмите Enter",24,172,365,22,new Font("Segoe UI",9),Muted));
-        count = LabelAt("",24,209,360,23,new Font("Segoe UI",10,FontStyle.Bold),Accent); Controls.Add(count);
-        list = new BackdropFlow { Location=new Point(22,244),Size=new Size(376,281), FlowDirection=FlowDirection.TopDown,WrapContents=false, AutoScroll=true, BackColor=Bg };
+        entryHint=LabelAt("Напишите дело и нажмите Enter",24,172,555,22,new Font("Segoe UI",9),Muted); Controls.Add(entryHint);
+        count = LabelAt("",24,209,550,23,new Font("Segoe UI",10,FontStyle.Bold),Accent); Controls.Add(count);
+        list = new BackdropFlow { Location=new Point(22,244),Size=new Size(566,281), FlowDirection=FlowDirection.TopDown,WrapContents=false, AutoScroll=true, BackColor=Bg };
         Controls.Add(list);
         carryNote=LabelAt("Незавершённые дела остаются на завтра.",24,550,366,20,new Font("Segoe UI",9),Muted); Controls.Add(carryNote);
         cleanupNote=LabelAt("Выполненные удаляются в 03:00 утра.",24,573,366,20,new Font("Segoe UI",9),Muted); Controls.Add(cleanupNote);
         foreach(Control control in Controls) if(control!=header) control.Top+=42;
-        ClientSize=new Size(410,648);
+        ClientSize=new Size(600,648);
         listTab=ButtonAt("Список дел",22,108,112,32,Accent,Bg); Controls.Add(listTab);
-        matrixTab=ButtonAt("Матрица Эйзенхауэра",142,108,246,32,Card,Ink); Controls.Add(matrixTab);
+        matrixTab=ButtonAt("Матрица Эйзенхауэра",142,108,436,32,Card,Ink); Controls.Add(matrixTab);
         listTab.Click+=delegate { SwitchView(false); }; matrixTab.Click+=delegate { SwitchView(true); };
-        matrix=new BackdropPanel { Location=list.Location,Size=new Size(366,410),BackColor=Bg,Visible=false }; Controls.Add(matrix);
+        matrix=new BackdropPanel { Location=new Point(22,154),Size=new Size(556,490),BackColor=Bg,Visible=false }; Controls.Add(matrix);
         string[] subtitles={"Важно · срочно","Важно · не срочно","Не важно · срочно","Не важно · не срочно"};
         for(int i=0;i<4;i++) {
-            var cell=new RoundedPanel { Location=new Point((i%2)*188,(i/2)*210),Size=new Size(178,200),BackColor=Card };
-            cell.Controls.Add(LabelAt(QuadrantNames[i],10,12,158,22,new Font("Segoe UI",10,FontStyle.Bold),Accent));
-            cell.Controls.Add(LabelAt(subtitles[i],10,36,158,21,new Font("Segoe UI",8),Muted));
-            quadrants[i]=new BackdropFlow { Location=new Point(7,64),Size=new Size(164,126),FlowDirection=FlowDirection.TopDown,WrapContents=false,AutoScroll=true,BackColor=Card };
+            int target=i;
+            var cell=new RoundedPanel { Location=new Point((i%2)*283,(i/2)*250),Size=new Size(273,240),BackColor=Card };
+            cell.Controls.Add(LabelAt(QuadrantNames[i],10,12,253,22,new Font("Segoe UI",10,FontStyle.Bold),Accent));
+            cell.Controls.Add(LabelAt(subtitles[i],10,36,253,21,new Font("Segoe UI",8),Muted));
+            quadrants[i]=new BackdropFlow { Location=new Point(7,58),Size=new Size(259,89),FlowDirection=FlowDirection.TopDown,WrapContents=false,AutoScroll=true,BackColor=Card };
             cell.Controls.Add(quadrants[i]); matrix.Controls.Add(cell);
+            cell.Controls.Add(LabelAt("Новое задание",12,151,240,19,new Font("Segoe UI",8),Muted));
+            var draftBox=new RoundedPanel { Location=new Point(10,170),Size=new Size(216,29),BackColor=Bg }; cell.Controls.Add(draftBox);
+            var draft=new TextBox { Location=new Point(8,5),Size=new Size(200,22),BackColor=Bg,ForeColor=Ink,BorderStyle=BorderStyle.None,MaxLength=500,Font=new Font("Segoe UI",10) }; draftBox.Controls.Add(draft);
+            var addHere=ButtonAt("+",232,168,30,30,Accent,IsGlass ? Ink : Bg); cell.Controls.Add(addHere);
+            addHere.Click+=delegate { AddMatrixTask(target,draft); };
+            draft.KeyDown+=delegate(object sender,KeyEventArgs e) { if(e.KeyCode==Keys.Enter) { e.SuppressKeyPress=true; AddMatrixTask(target,draft); } };
+            var fromList=ButtonAt("+ Из списка",10,205,253,26,Card,Accent); cell.Controls.Add(fromList);
+            fromList.Click+=delegate { ShowAddFromList(target,fromList); };
         }
         if(preview) {
-            data=new TaskData(); data.Tasks.Add(new TaskItem { Text="Записать планы на день",Urgent=true }); data.Tasks.Add(new TaskItem { Text="Прогуляться на свежем воздухе" }); data.Tasks.Add(new TaskItem { Text="Выпить стакан воды",Important=false,Done=true,CompletedAt=DateTime.Now });
+            data=new TaskData(); data.Tasks.Add(new TaskItem { Text="Записать планы на день",Urgent=true,InMatrix=true }); data.Tasks.Add(new TaskItem { Text="Прогуляться на свежем воздухе",InMatrix=true }); data.Tasks.Add(new TaskItem { Text="Выпить стакан воды",Important=false,InMatrix=true,Done=true,CompletedAt=DateTime.Now });
         } else {
             try { data=Storage.Read(dataPath); }
             catch(Exception ex) {
@@ -184,17 +197,40 @@ public class DayTasks : Form {
     }
     void SwitchView(bool showMatrix) {
         matrixView=showMatrix; list.Visible=!showMatrix; matrix.Visible=showMatrix;
-        ClientSize=new Size(410,showMatrix ? 780 : 648);
-        carryNote.Top=showMatrix ? 722 : 592; cleanupNote.Top=showMatrix ? 745 : 615;
+        input.Parent.Visible=!showMatrix; entryHint.Visible=!showMatrix; count.Visible=!showMatrix;
+        ClientSize=new Size(600,showMatrix ? 724 : 648);
+        carryNote.Top=showMatrix ? 666 : 592; cleanupNote.Top=showMatrix ? 689 : 615;
         listTab.BackColor=showMatrix ? Card : Accent; listTab.ForeColor=showMatrix ? Ink : Bg;
         matrixTab.BackColor=showMatrix ? Accent : Card; matrixTab.ForeColor=showMatrix ? Bg : Ink;
         Round(this,22);
         if(desktop!=IntPtr.Zero) {
             Rectangle screen=Screen.FromHandle(Handle).WorkingArea; Point origin=PointToScreen(Point.Empty);
             if(origin.Y+Height>screen.Bottom) Top-=Math.Max(0,origin.Y+Height-screen.Bottom);
+            if(origin.X+Width>screen.Right) Left-=Math.Max(0,origin.X+Width-screen.Right);
             UpdateGlassEffects(); SavePosition();
         }
         if(IsGlass) RefreshGlassInput(); Invalidate(true);
+    }
+    void AddMatrixTask(int target,TextBox draft) {
+        string text=draft.Text.Trim(); if(readFailed || text.Length==0) return;
+        var task=new TaskItem { Text=text }; SetQuadrant(task,target); data.Tasks.Add(task);
+        if(!Save()) { data.Tasks.Remove(task); return; } draft.Clear(); RefreshTasks(); draft.Focus();
+    }
+    void AssignMatrix(TaskItem task,int target) {
+        if(readFailed) return;
+        bool assigned=task.InMatrix,important=task.Important,urgent=task.Urgent;
+        SetQuadrant(task,target);
+        if(!Save()) { task.InMatrix=assigned; task.Important=important; task.Urgent=urgent; } RefreshTasks();
+    }
+    void ShowAddFromList(int target,Control anchor) {
+        if(readFailed) return;
+        var menu=new ContextMenuStrip { BackColor=Card,ForeColor=Ink,ShowImageMargin=false,MaximumSize=new Size(440,450) };
+        foreach(TaskItem task in OrderedTasks(data)) if(!task.InMatrix) {
+            var item=new ToolStripMenuItem((task.Done ? "✓ " : "")+(task.Text.Length>48 ? task.Text.Substring(0,48)+"…" : task.Text)) { ToolTipText=task.Text };
+            item.Click+=delegate { AssignMatrix(task,target); }; menu.Items.Add(item);
+        }
+        if(menu.Items.Count==0) menu.Items.Add(new ToolStripMenuItem("Нет нераспределённых дел") { Enabled=false });
+        menu.Closed+=delegate { BeginInvoke(new MethodInvoker(delegate { menu.Dispose(); })); }; menu.Show(anchor,new Point(0,anchor.Height));
     }
     void ShowTaskMenu(TaskItem task,Control anchor) {
         if(readFailed) return;
@@ -203,12 +239,11 @@ public class DayTasks : Form {
             int target=i;
             var item=new ToolStripMenuItem(QuadrantNames[i]) { Checked=Quadrant(task)==i };
             item.Click+=delegate {
-                bool important=task.Important,urgent=task.Urgent;
-                task.Important=target<2; task.Urgent=target==0 || target==2;
-                if(!Save()) { task.Important=important; task.Urgent=urgent; } RefreshTasks();
+                AssignMatrix(task,target);
             };
             menu.Items.Add(item);
         }
+        menu.Items.Add("Убрать из матрицы",null,delegate { AssignMatrix(task,-1); });
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Удалить дело",null,delegate { int index=data.Tasks.IndexOf(task); data.Tasks.Remove(task); if(!Save()) data.Tasks.Insert(index,task); RefreshTasks(); });
         menu.Closed+=delegate { BeginInvoke(new MethodInvoker(delegate { menu.Dispose(); })); }; menu.Show(anchor,new Point(0,anchor.Height));
@@ -315,7 +350,7 @@ public class DayTasks : Form {
         var b=new SoftButton { Text=text,Location=new Point(x,y),Size=new Size(w,h),FlatStyle=FlatStyle.Flat,BackColor=back,ForeColor=fore,Cursor=Cursors.Hand,TabStop=false }; b.FlatAppearance.BorderSize=0; return b;
     }
     void UpdateDate() { date.Text=DateTime.Now.ToString("dddd, d MMMM",System.Globalization.CultureInfo.GetCultureInfo("ru-RU")); }
-    bool Save() { try { Storage.Write(dataPath,data); return true; } catch(Exception ex) { MessageBox.Show("Не удалось сохранить дела.\n"+ex.Message,Text,MessageBoxButtons.OK,MessageBoxIcon.Error); return false; } }
+    bool Save() { if(saveOverride!=null) return saveOverride(); try { Storage.Write(dataPath,data); return true; } catch(Exception ex) { MessageBox.Show("Не удалось сохранить дела.\n"+ex.Message,Text,MessageBoxButtons.OK,MessageBoxIcon.Error); return false; } }
     void AddTask() {
         string text=input.Text.Trim(); if(text.Length==0 || readFailed) return;
         var t=new TaskItem { Text=text }; data.Tasks.Add(t);
@@ -333,19 +368,19 @@ public class DayTasks : Form {
             var group=quadrants[q]; group.SuspendLayout();
             while(group.Controls.Count>0) { var child=group.Controls[0]; group.Controls.Remove(child); child.Dispose(); }
             foreach(TaskItem task in OrderedTasks(data)) if(Quadrant(task)==q) group.Controls.Add(CreateTaskRow(task,true));
-            if(group.Controls.Count==0) group.Controls.Add(LabelAt("Пока пусто",4,4,142,24,new Font("Segoe UI",9),Muted));
+            if(group.Controls.Count==0) group.Controls.Add(LabelAt("Добавьте задание ниже",4,4,240,24,new Font("Segoe UI",9),Muted));
             group.ResumeLayout();
         }
     }
     Control CreateTaskRow(TaskItem task,bool compact) {
-            var row=new RoundedPanel { Size=new Size(compact ? 144 : 352,compact ? 66 : 68),BackColor=Card,Margin=new Padding(0,0,0,9) };
+            var row=new RoundedPanel { Size=new Size(compact ? 239 : 542,compact ? 66 : 68),BackColor=Card,Margin=new Padding(0,0,0,9) };
             var check=new TaskCheck(task.Done,Card,Muted,Accent,Bg) { Location=new Point(compact ? 0 : 12,20),Enabled=!readFailed };
             row.Controls.Add(check);
-            var label=LabelAt(task.Text,compact ? 31 : 51,12,compact ? 88 : 230,45,new Font("Segoe UI",compact ? 8.5f : 10,task.Done ? FontStyle.Strikeout : FontStyle.Regular),task.Done ? Muted : Ink); row.Controls.Add(label);
+            var label=LabelAt(task.Text,compact ? 31 : 51,12,compact ? 183 : 420,45,new Font("Segoe UI",10,task.Done ? FontStyle.Strikeout : FontStyle.Regular),task.Done ? Muted : Ink); row.Controls.Add(label);
             var tooltip=new ToolTip(); tooltip.SetToolTip(label,task.Text); row.Disposed+=delegate { tooltip.Dispose(); };
-            var remove=ButtonAt("×",319,20,24,28,Card,Muted); remove.Enabled=!readFailed; row.Controls.Add(remove);
+            var remove=ButtonAt("×",509,20,24,28,Card,Muted); remove.Enabled=!readFailed; row.Controls.Add(remove);
             remove.Visible=!compact;
-            var priority=ButtonAt("⋯",compact ? 120 : 287,20,24,28,Card,Muted); priority.Enabled=!readFailed; row.Controls.Add(priority);
+            var priority=ButtonAt("⋯",compact ? 215 : 477,20,24,28,Card,Muted); priority.Enabled=!readFailed; row.Controls.Add(priority);
             priority.Click+=delegate { ShowTaskMenu(task,priority); }; tooltip.SetToolTip(priority,"Раздел матрицы и действия");
             check.Click+=delegate {
                 bool old=task.Done; DateTime oldTime=task.CompletedAt; task.Done=!task.Done; task.CompletedAt=task.Done ? DateTime.Now : DateTime.MinValue;
@@ -363,7 +398,7 @@ public class DayTasks : Form {
         Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
         if(args.Length>0 && args[0]=="--self-test") return SelfTest(args[1]);
         if(args.Length>0 && args[0]=="--effects-test") return EffectsTest(args[1]);
-        if(args.Length>0 && args[0]=="--preview") { using(var f=new DayTasks(true,args.Length>2 ? args[2] : null)) { if(args.Length>3 && args[3]=="matrix") { f.data.Tasks.Add(new TaskItem { Text="Ответить на письмо",Important=false,Urgent=true }); f.RefreshTasks(); f.SwitchView(true); } f.Show(); Application.DoEvents(); using(var bmp=new Bitmap(f.Width,f.Height)) { f.DrawToBitmap(bmp,new Rectangle(0,0,f.Width,f.Height)); bmp.Save(args[1]); } } return 0; }
+        if(args.Length>0 && args[0]=="--preview") { using(var f=new DayTasks(true,args.Length>2 ? args[2] : null)) { if(args.Length>3 && args[3]=="matrix") { f.data.Tasks.Add(new TaskItem { Text="Ответить на письмо",Important=false,Urgent=true,InMatrix=true }); f.RefreshTasks(); f.SwitchView(true); } f.Show(); Application.DoEvents(); using(var bmp=new Bitmap(f.Width,f.Height)) { f.DrawToBitmap(bmp,new Rectangle(0,0,f.Width,f.Height)); bmp.Save(args[1]); } } return 0; }
         using(var wake=new EventWaitHandle(false,EventResetMode.AutoReset,"Local\\CodexDayTasksWidgetWake")) {
             bool created;
             using(var mutex=new Mutex(true,"Local\\CodexDayTasksWidget",out created)) {
@@ -432,21 +467,34 @@ public class DayTasks : Form {
                 if((string)window.list.Controls[0].Tag!=window.data.Tasks[0].Id) throw new Exception("Unchecked task did not return to active group");
                 window.data.Tasks[1].Important=false; window.data.Tasks[1].Urgent=true; window.RefreshTasks();
                 if((string)window.quadrants[0].Controls[0].Tag!=window.data.Tasks[0].Id || (string)window.quadrants[2].Controls[0].Tag!=window.data.Tasks[1].Id || (string)window.quadrants[3].Controls[0].Tag!=window.data.Tasks[2].Id) throw new Exception("Matrix routing");
-                window.SwitchView(true); if(window.ClientSize.Height!=780) throw new Exception("Matrix layout");
+                window.SwitchView(true); if(window.ClientSize.Height!=724 || window.ClientSize.Width!=600) throw new Exception("Matrix layout");
                 window.SwitchView(false); if(window.ClientSize.Height!=648) throw new Exception("List layout");
+                if(Quadrant(new TaskItem())!=-1) throw new Exception("New tasks must not be assigned automatically");
+                window.saveOverride=delegate { return true; };
+                using(var draft=new TextBox { Text="Задание из раздела" }) {
+                    int before=window.data.Tasks.Count; window.AddMatrixTask(3,draft);
+                    if(window.data.Tasks.Count!=before+1 || Quadrant(window.data.Tasks[before])!=3 || draft.Text!="") throw new Exception("Add in quadrant");
+                    window.AssignMatrix(window.data.Tasks[before],0);
+                    if(window.data.Tasks.Count!=before+1 || Quadrant(window.data.Tasks[before])!=0) throw new Exception("Assignment duplicated task");
+                    window.AssignMatrix(window.data.Tasks[before],-1);
+                    if(Quadrant(window.data.Tasks[before])!=-1 || window.list.Controls.Count!=before+1) throw new Exception("Remove from matrix must preserve task");
+                    window.saveOverride=delegate { return false; }; draft.Text="Сохранить черновик";
+                    window.AddMatrixTask(0,draft); window.AssignMatrix(window.data.Tasks[before],2);
+                    if(window.data.Tasks.Count!=before+1 || draft.Text!="Сохранить черновик" || Quadrant(window.data.Tasks[before])!=-1) throw new Exception("Failed save must roll back matrix changes");
+                }
             }
             Directory.CreateDirectory(folder); var d=new TaskData(); DateTime today=new DateTime(2026,10,14);
-            d.Tasks.Add(new TaskItem { Text="Остаётся",Important=false,Urgent=true }); d.Tasks.Add(new TaskItem { Text="Вчера",Done=true,CompletedAt=today.AddDays(-1).AddHours(12) });
+            d.Tasks.Add(new TaskItem { Text="Остаётся",Important=false,Urgent=true,InMatrix=true }); d.Tasks.Add(new TaskItem { Text="Вчера",Done=true,CompletedAt=today.AddDays(-1).AddHours(12) });
             if(Storage.Clean(d,today.AddHours(2).AddMinutes(59))!=0) throw new Exception("Before boundary");
             if(Storage.Clean(d,today.AddHours(3))!=1 || d.Tasks.Count!=1) throw new Exception("Boundary cleanup");
             d.Tasks.Add(new TaskItem { Text="Сегодня",Done=true,CompletedAt=today.AddHours(4) });
             if(Storage.Clean(d,today.AddHours(22))!=0) throw new Exception("Same-day completion");
             string path=Path.Combine(folder,"test.xml"); Storage.Write(path,d); var loaded=Storage.Read(path);
             if(loaded.Tasks.Count!=2 || loaded.Tasks[0].Text!="Остаётся") throw new Exception("Persistence");
-            if(loaded.Tasks[0].Important || !loaded.Tasks[0].Urgent) throw new Exception("Priority persistence");
+            if(loaded.Tasks[0].Important || !loaded.Tasks[0].Urgent || !loaded.Tasks[0].InMatrix) throw new Exception("Priority persistence");
             using(var legacy=new StringReader("<TaskData><Tasks><TaskItem><Text>Старое дело</Text></TaskItem></Tasks></TaskData>")) {
                 var migrated=(TaskData)new XmlSerializer(typeof(TaskData)).Deserialize(legacy);
-                if(migrated.Tasks.Count!=1 || Quadrant(migrated.Tasks[0])!=1) throw new Exception("Legacy task migration");
+                if(migrated.Tasks.Count!=1 || Quadrant(migrated.Tasks[0])!=-1) throw new Exception("Legacy tasks must remain in the list only");
             }
             Storage.Write(path,loaded); if(!File.Exists(path+".bak")) throw new Exception("Backup");
             if(Storage.Clean(loaded,today.AddDays(3).AddHours(10))!=1 || loaded.Tasks[0].Done) throw new Exception("Offline rollover");
