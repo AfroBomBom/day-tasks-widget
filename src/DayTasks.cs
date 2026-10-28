@@ -155,7 +155,7 @@ public class DayTasks : Form {
         foreach(Control control in Controls) if(control!=header) control.Top+=42;
         ClientSize=new Size(410,648);
         listTab=ButtonAt("Список дел",22,108,112,32,Accent,Bg); Controls.Add(listTab);
-        matrixTab=ButtonAt("Матрица Эйзенхауэра",142,108,246,32,Card,Ink); matrixTab.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right; Controls.Add(matrixTab);
+        matrixTab=ButtonAt("Матрица Эйзенхауэра",142,108,246,32,Card,Ink); Controls.Add(matrixTab);
         listTab.Click+=delegate { SwitchView(false); }; matrixTab.Click+=delegate { SwitchView(true); };
         matrix=new BackdropPanel { Location=new Point(22,154),Size=new Size(556,490),BackColor=Bg,Visible=false }; Controls.Add(matrix);
         string[] subtitles={"Важно · срочно","Важно · не срочно","Не важно · срочно","Не важно · не срочно"};
@@ -196,16 +196,15 @@ public class DayTasks : Form {
         if(IsGlass) { WallpaperBackdrop.Refresh(this); RefreshGlassInput(); }
     }
     void SwitchView(bool showMatrix) {
-        int previousWidth=Width;
         matrixView=showMatrix; list.Visible=!showMatrix; matrix.Visible=showMatrix;
         input.Parent.Visible=!showMatrix; entryHint.Visible=!showMatrix; count.Visible=!showMatrix;
         ClientSize=new Size(showMatrix ? 600 : 410,showMatrix ? 724 : 648);
         carryNote.Top=showMatrix ? 666 : 592; cleanupNote.Top=showMatrix ? 689 : 615;
-        listTab.BackColor=showMatrix ? Card : Accent; listTab.ForeColor=showMatrix ? Ink : Bg;
-        matrixTab.BackColor=showMatrix ? Accent : Card; matrixTab.ForeColor=showMatrix ? Bg : Ink;
+        listTab.BackColor=showMatrix ? Card : Accent; listTab.ForeColor=showMatrix || IsGlass ? Ink : Bg;
+        matrixTab.BackColor=showMatrix ? Accent : Card; matrixTab.ForeColor=!showMatrix || IsGlass ? Ink : Bg;
+        ((SoftButton)listTab).Emphasized=!showMatrix; ((SoftButton)matrixTab).Emphasized=showMatrix;
         Round(this,22);
         if(desktop!=IntPtr.Zero) {
-            Left+=previousWidth-Width;
             Rectangle screen=Screen.FromHandle(Handle).WorkingArea; Point origin=PointToScreen(Point.Empty);
             if(origin.Y+Height>screen.Bottom) Top-=Math.Max(0,origin.Y+Height-screen.Bottom);
             if(origin.X+Width>screen.Right) Left-=Math.Max(0,origin.X+Width-screen.Right);
@@ -375,14 +374,14 @@ public class DayTasks : Form {
         }
     }
     Control CreateTaskRow(TaskItem task,bool compact) {
-            var row=new RoundedPanel { Size=new Size(compact ? 239 : 352,compact ? 66 : 68),BackColor=Card,Margin=new Padding(0,0,0,9) };
-            var check=new TaskCheck(task.Done,Card,Muted,Accent,Bg) { Location=new Point(compact ? 0 : 12,20),Enabled=!readFailed };
+            var row=new RoundedPanel { Size=new Size(compact ? 239 : 352,compact ? 50 : 68),BackColor=Card,Margin=new Padding(0,0,0,9) };
+            var check=new TaskCheck(task.Done,Card,Muted,Accent,Bg) { Location=new Point(compact ? 0 : 12,compact ? 11 : 20),Enabled=!readFailed };
             row.Controls.Add(check);
-            var label=LabelAt(task.Text,compact ? 31 : 51,12,compact ? 183 : 230,45,new Font("Segoe UI",10,task.Done ? FontStyle.Strikeout : FontStyle.Regular),task.Done ? Muted : Ink); row.Controls.Add(label);
+            var label=LabelAt(task.Text,compact ? 31 : 51,compact ? 8 : 12,compact ? 183 : 230,compact ? 35 : 45,new Font("Segoe UI",9,task.Done ? FontStyle.Strikeout : FontStyle.Regular),task.Done ? Muted : Ink); row.Controls.Add(label);
             var tooltip=new ToolTip(); tooltip.SetToolTip(label,task.Text); row.Disposed+=delegate { tooltip.Dispose(); };
             var remove=ButtonAt("×",319,20,24,28,Card,Muted); remove.Enabled=!readFailed; row.Controls.Add(remove);
             remove.Visible=!compact;
-            var priority=ButtonAt("⋯",compact ? 215 : 287,20,24,28,Card,Muted); priority.Enabled=!readFailed; row.Controls.Add(priority);
+            var priority=ButtonAt("⋯",compact ? 215 : 287,compact ? 11 : 20,24,28,Card,Muted); priority.Enabled=!readFailed; row.Controls.Add(priority);
             priority.Click+=delegate { ShowTaskMenu(task,priority); }; tooltip.SetToolTip(priority,"Раздел матрицы и действия");
             check.Click+=delegate {
                 bool old=task.Done; DateTime oldTime=task.CompletedAt; task.Done=!task.Done; task.CompletedAt=task.Done ? DateTime.Now : DateTime.MinValue;
@@ -464,6 +463,9 @@ public class DayTasks : Form {
                 int taskCount=window.data.Tasks.Count;
                 foreach(Palette theme in Palettes) {
                     window.ApplyTheme(theme);
+                    window.SwitchView(true);
+                    if(window.matrixTab.Width!=246 || window.matrixTab.ForeColor!=(window.IsGlass ? theme.Ink : theme.Bg)) throw new Exception("Matrix tab readability");
+                    window.SwitchView(false);
                     if(window.BackColor!=theme.Bg || (!window.IsGlass && window.input.BackColor!=theme.Card) || window.input.ForeColor!=theme.Ink) throw new Exception("Theme colors");
                     if(window.input.Text!="Не потерять черновик" || window.data.Tasks.Count!=taskCount) throw new Exception("Theme changed tasks or draft");
                 }
@@ -473,7 +475,8 @@ public class DayTasks : Form {
                 if((string)window.list.Controls[0].Tag!=window.data.Tasks[0].Id) throw new Exception("Unchecked task did not return to active group");
                 window.data.Tasks[1].Important=false; window.data.Tasks[1].Urgent=true; window.RefreshTasks();
                 if((string)window.quadrants[0].Controls[0].Tag!=window.data.Tasks[0].Id || (string)window.quadrants[2].Controls[0].Tag!=window.data.Tasks[1].Id || (string)window.quadrants[3].Controls[0].Tag!=window.data.Tasks[2].Id) throw new Exception("Matrix routing");
-                window.SwitchView(true); if(window.ClientSize.Height!=724 || window.ClientSize.Width!=600) throw new Exception("Matrix layout");
+                int leftEdge=window.Left;
+                window.SwitchView(true); if(window.ClientSize.Height!=724 || window.ClientSize.Width!=600 || window.Left!=leftEdge) throw new Exception("Matrix must expand to the right");
                 window.SwitchView(false); if(window.ClientSize.Height!=648 || window.ClientSize.Width!=410 || window.input.Width!=290) throw new Exception("List layout");
                 if(Quadrant(new TaskItem())!=-1) throw new Exception("New tasks must not be assigned automatically");
                 window.saveOverride=delegate { return true; };
@@ -556,13 +559,14 @@ class BackdropFlow : FlowLayoutPanel {
     protected override void OnPaintBackground(PaintEventArgs e) { GlassPaint.Background(this,e.Graphics); }
 }
 class SoftButton : Button {
+    public bool Emphasized;
     public SoftButton() { SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer,true); }
     protected override void OnPaint(PaintEventArgs e) {
         GlassPaint.Background(this,e.Graphics); e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
         using(var path=RoundedPanel.Shape(Width,Height,10)) {
             var form=FindForm() as DayTasks;
             if(form!=null && form.IsGlass) {
-                Color top=Color.FromArgb(Text=="+" ? 115 : 35,255,255,255),bottom=Color.FromArgb(35,20,35,45);
+                Color top=Color.FromArgb(Text=="+" ? 115 : Emphasized ? 90 : 35,255,255,255),bottom=Color.FromArgb(35,20,35,45);
                 using(var fill=new LinearGradientBrush(ClientRectangle,top,bottom,90f)) e.Graphics.FillPath(fill,path);
                 using(var border=new Pen(Color.FromArgb(75,255,255,255),1)) e.Graphics.DrawPath(border,path);
             } else { using(var brush=new SolidBrush(BackColor)) e.Graphics.FillPath(brush,path); }
