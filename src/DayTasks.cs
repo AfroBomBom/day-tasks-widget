@@ -73,6 +73,11 @@ public class DayTasks : Form {
     TextBox input;
     Label count, date;
     System.Windows.Forms.Timer timer;
+    System.Windows.Forms.Timer resizeTimer;
+    readonly System.Diagnostics.Stopwatch resizeClock=new System.Diagnostics.Stopwatch();
+    Size resizeFrom,resizeTo;
+    Point resizeOrigin,resizeDestination;
+    bool resizeFrame;
     bool readFailed;
     Func<bool> saveOverride;
     IntPtr desktop;
@@ -103,6 +108,7 @@ public class DayTasks : Form {
         else { try { theme=File.ReadAllText(themePath).Trim(); } catch { } }
         palette=FindPalette(theme);
         Font = new Font("Segoe UI", 10); BackColor = Bg; ForeColor = Ink;
+        SetStyle(ControlStyles.OptimizedDoubleBuffer|ControlStyles.AllPaintingInWmPaint|ControlStyles.ResizeRedraw,true);
         Text = "Дела на день"; FormBorderStyle = FormBorderStyle.None; ClientSize = new Size(410, 606);
         StartPosition = FormStartPosition.Manual;
         Rectangle area=Screen.PrimaryScreen.WorkingArea;
@@ -156,7 +162,7 @@ public class DayTasks : Form {
         ClientSize=new Size(410,648);
         listTab=ButtonAt("Список дел",22,108,112,32,Accent,Bg); Controls.Add(listTab);
         matrixTab=ButtonAt("Матрица Эйзенхауэра",142,108,246,32,Card,Ink); Controls.Add(matrixTab);
-        listTab.Click+=delegate { SwitchView(false); }; matrixTab.Click+=delegate { SwitchView(true); };
+        listTab.Click+=delegate { SwitchView(false,true); }; matrixTab.Click+=delegate { SwitchView(true,true); };
         matrix=new BackdropPanel { Location=new Point(22,154),Size=new Size(556,490),BackColor=Bg,Visible=false }; Controls.Add(matrix);
         string[] subtitles={"Важно · срочно","Важно · не срочно","Не важно · срочно","Не важно · не срочно"};
         for(int i=0;i<4;i++) {
@@ -191,26 +197,49 @@ public class DayTasks : Form {
             timer=new System.Windows.Forms.Timer { Interval=15000 };
             timer.Tick+=delegate { if(!readFailed && Storage.Clean(data,DateTime.Now)>0) { Save(); RefreshTasks(); } UpdateDate(); if(IsGlass) { WallpaperBackdrop.Refresh(this); RefreshGlassInput(); Invalidate(true); } }; timer.Start();
         }
-        FormClosed+=delegate { if(timer!=null) timer.Dispose(); if(shadow!=null) shadow.Dispose(); };
+        FormClosed+=delegate { if(timer!=null) timer.Dispose(); if(resizeTimer!=null) resizeTimer.Dispose(); if(shadow!=null) shadow.Dispose(); };
         Round(this,22);
         if(IsGlass) { WallpaperBackdrop.Refresh(this); RefreshGlassInput(); }
     }
-    void SwitchView(bool showMatrix) {
+    static double ResizeEase(double progress) { double t=Math.Max(0,Math.Min(1,progress)); return t*t*t*(t*(t*6-15)+10); }
+    void SwitchView(bool showMatrix,bool animate=false) {
+        if(resizeTimer!=null) resizeTimer.Stop();
         matrixView=showMatrix; list.Visible=!showMatrix; matrix.Visible=showMatrix;
         input.Parent.Visible=!showMatrix; entryHint.Visible=!showMatrix; count.Visible=!showMatrix;
-        ClientSize=new Size(showMatrix ? 600 : 410,showMatrix ? 724 : 648);
-        carryNote.Top=showMatrix ? 666 : 592; cleanupNote.Top=showMatrix ? 689 : 615;
         listTab.BackColor=showMatrix ? Card : Accent; listTab.ForeColor=showMatrix || IsGlass ? Ink : Bg;
         matrixTab.BackColor=showMatrix ? Accent : Card; matrixTab.ForeColor=!showMatrix || IsGlass ? Ink : Bg;
         ((SoftButton)listTab).Emphasized=!showMatrix; ((SoftButton)matrixTab).Emphasized=showMatrix;
-        Round(this,22);
+        resizeFrom=ClientSize; resizeTo=new Size(showMatrix ? 600 : 410,showMatrix ? 724 : 648);
+        resizeOrigin=Location; resizeDestination=Location;
         if(desktop!=IntPtr.Zero) {
             Rectangle screen=Screen.FromHandle(Handle).WorkingArea; Point origin=PointToScreen(Point.Empty);
-            if(origin.Y+Height>screen.Bottom) Top-=Math.Max(0,origin.Y+Height-screen.Bottom);
-            if(origin.X+Width>screen.Right) Left-=Math.Max(0,origin.X+Width-screen.Right);
-            UpdateGlassEffects(); SavePosition();
+            resizeDestination.Offset(-Math.Max(0,origin.X+resizeTo.Width-screen.Right),-Math.Max(0,origin.Y+resizeTo.Height-screen.Bottom));
         }
+        if(!animate || !Visible || resizeFrom==resizeTo) { ApplyResizeFrame(1); FinishResize(); return; }
+        if(resizeTimer==null) {
+            resizeTimer=new System.Windows.Forms.Timer { Interval=15 };
+            resizeTimer.Tick+=delegate {
+                double progress=Math.Min(1,resizeClock.Elapsed.TotalMilliseconds/340.0);
+                ApplyResizeFrame(ResizeEase(progress));
+                if(progress>=1) { resizeTimer.Stop(); FinishResize(); }
+            };
+        }
+        resizeClock.Restart(); resizeTimer.Start(); Invalidate(true);
+    }
+    void ApplyResizeFrame(double progress) {
+        resizeFrame=true; SuspendLayout();
+        try {
+            ClientSize=new Size((int)Math.Round(resizeFrom.Width+(resizeTo.Width-resizeFrom.Width)*progress),(int)Math.Round(resizeFrom.Height+(resizeTo.Height-resizeFrom.Height)*progress));
+            Location=new Point((int)Math.Round(resizeOrigin.X+(resizeDestination.X-resizeOrigin.X)*progress),(int)Math.Round(resizeOrigin.Y+(resizeDestination.Y-resizeOrigin.Y)*progress));
+            carryNote.Top=ClientSize.Height-(matrixView ? 58 : 56); cleanupNote.Top=ClientSize.Height-33;
+            Round(this,22);
+        } finally { ResumeLayout(true); resizeFrame=false; }
+        if(desktop!=IntPtr.Zero && shadow!=null) shadow.Update(Handle,desktop,Width,Height);
         if(IsGlass) RefreshGlassInput(); Invalidate(true);
+    }
+    void FinishResize() {
+        resizeClock.Stop();
+        if(desktop!=IntPtr.Zero) { UpdateGlassEffects(); SavePosition(); }
     }
     void AddMatrixTask(int target,TextBox draft) {
         string text=draft.Text.Trim(); if(readFailed || text.Length==0) return;
@@ -257,7 +286,7 @@ public class DayTasks : Form {
         if(IsGlass) GlassPaint.Background(this,e.Graphics); else base.OnPaintBackground(e);
     }
     protected override void OnLocationChanged(EventArgs e) {
-        base.OnLocationChanged(e); if(desktop!=IntPtr.Zero && shadow!=null) { shadow.Update(Handle,desktop,Width,Height); WallpaperBackdrop.Refresh(this); RefreshGlassInput(); Invalidate(true); }
+        base.OnLocationChanged(e); if(!resizeFrame && desktop!=IntPtr.Zero && shadow!=null) { shadow.Update(Handle,desktop,Width,Height); WallpaperBackdrop.Refresh(this); RefreshGlassInput(); Invalidate(true); }
     }
     void UpdateGlassEffects() {
         if(desktop==IntPtr.Zero) return;
@@ -437,10 +466,12 @@ public class DayTasks : Form {
                 uint key,flags; byte alpha;
                 if(!GetLayeredWindowAttributes(window.Handle,out key,out alpha,out flags) || alpha!=220) throw new Exception("Glass opacity was not applied");
                 if(window.shadow==null || !window.shadow.Visible || !window.shadow.AlignedWith(window.Handle)) throw new Exception("Shadow visibility or position");
-                window.SwitchView(true); Application.DoEvents();
+                window.SwitchView(true,true); WaitForResize(window);
                 if(window.Width!=600 || !window.shadow.AlignedWith(window.Handle)) throw new Exception("Expanded matrix shadow layout");
-                window.SwitchView(false); Application.DoEvents();
+                window.SwitchView(false,true); WaitForResize(window);
                 if(window.Width!=410 || !window.shadow.AlignedWith(window.Handle)) throw new Exception("Compact list shadow layout");
+                window.SwitchView(true,true); Application.DoEvents(); window.SwitchView(false,true); WaitForResize(window);
+                if(window.Width!=410 || window.matrixView || !window.shadow.AlignedWith(window.Handle)) throw new Exception("Interrupted animation must settle on latest tab");
                 window.ApplyTheme(FindPalette("blue")); Application.DoEvents();
                 if(window.shadow!=null || (GetWindowLong(window.Handle,-20)&0x80000)!=0) throw new Exception("Opaque theme did not reset transparency");
                 window.ApplyTheme(FindPalette("glass")); Application.DoEvents();
@@ -450,8 +481,16 @@ public class DayTasks : Form {
             File.WriteAllText(Path.Combine(folder,"effects-result.txt"),"PASS: frosted wallpaper, native opacity 220/255, visible aligned shadow, theme reset, shadow restoration"); return 0;
         } catch(Exception ex) { File.WriteAllText(Path.Combine(folder,"effects-result.txt"),ex.ToString()); return 1; }
     }
+    static void WaitForResize(DayTasks window) {
+        var timeout=System.Diagnostics.Stopwatch.StartNew();
+        while(window.resizeTimer!=null && window.resizeTimer.Enabled && timeout.ElapsedMilliseconds<2500) { Application.DoEvents(); Thread.Sleep(2); }
+        if(window.resizeTimer!=null && window.resizeTimer.Enabled) throw new Exception("Resize animation timed out");
+    }
     static int SelfTest(string folder) {
         try {
+            if(ResizeEase(0)!=0 || ResizeEase(1)!=1) throw new Exception("Animation endpoints");
+            double previous=0;
+            for(int i=0;i<=100;i++) { double value=ResizeEase(i/100.0); if(value<previous || value>1) throw new Exception("Animation must not overshoot"); previous=value; }
             using(var source=new Bitmap(16,16)) {
                 for(int y=0;y<16;y++) for(int x=0;x<16;x++) source.SetPixel(x,y,((x+y)%2==0) ? Color.Black : Color.White);
                 using(var blurred=WallpaperBackdrop.Blur(source,2)) { Color center=blurred.GetPixel(8,8); if(center.R<70 || center.R>185 || center.A!=255) throw new Exception("Wallpaper blur did not soften texture"); }
