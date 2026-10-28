@@ -12,6 +12,8 @@ using System.Runtime.InteropServices;
     public string Id = Guid.NewGuid().ToString();
     public string Text = "";
     public bool Done;
+    public bool Important=true;
+    public bool Urgent;
     public DateTime CompletedAt;
 }
 [Serializable] public class TaskData { public List<TaskItem> Tasks = new List<TaskItem>(); }
@@ -58,6 +60,13 @@ public class DayTasks : Form {
     readonly string dataPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Данные", "дела.xml");
     TaskData data;
     FlowLayoutPanel list;
+    BackdropPanel matrix;
+    FlowLayoutPanel[] quadrants=new FlowLayoutPanel[4];
+    Button listTab,matrixTab;
+    Label carryNote,cleanupNote;
+    bool matrixView;
+    static readonly string[] QuadrantNames={"Сделать сейчас","Запланировать","Делегировать","Отложить"};
+    static int Quadrant(TaskItem task) { return task.Important ? (task.Urgent ? 0 : 1) : (task.Urgent ? 2 : 3); }
     TextBox input;
     Label count, date;
     System.Windows.Forms.Timer timer;
@@ -137,10 +146,24 @@ public class DayTasks : Form {
         count = LabelAt("",24,209,360,23,new Font("Segoe UI",10,FontStyle.Bold),Accent); Controls.Add(count);
         list = new BackdropFlow { Location=new Point(22,244),Size=new Size(376,281), FlowDirection=FlowDirection.TopDown,WrapContents=false, AutoScroll=true, BackColor=Bg };
         Controls.Add(list);
-        Controls.Add(LabelAt("Незавершённые дела остаются на завтра.",24,550,366,20,new Font("Segoe UI",9),Muted));
-        Controls.Add(LabelAt("Выполненные удаляются в 03:00 утра.",24,573,366,20,new Font("Segoe UI",9),Muted));
+        carryNote=LabelAt("Незавершённые дела остаются на завтра.",24,550,366,20,new Font("Segoe UI",9),Muted); Controls.Add(carryNote);
+        cleanupNote=LabelAt("Выполненные удаляются в 03:00 утра.",24,573,366,20,new Font("Segoe UI",9),Muted); Controls.Add(cleanupNote);
+        foreach(Control control in Controls) if(control!=header) control.Top+=42;
+        ClientSize=new Size(410,648);
+        listTab=ButtonAt("Список дел",22,108,112,32,Accent,Bg); Controls.Add(listTab);
+        matrixTab=ButtonAt("Матрица Эйзенхауэра",142,108,246,32,Card,Ink); Controls.Add(matrixTab);
+        listTab.Click+=delegate { SwitchView(false); }; matrixTab.Click+=delegate { SwitchView(true); };
+        matrix=new BackdropPanel { Location=list.Location,Size=new Size(366,410),BackColor=Bg,Visible=false }; Controls.Add(matrix);
+        string[] subtitles={"Важно · срочно","Важно · не срочно","Не важно · срочно","Не важно · не срочно"};
+        for(int i=0;i<4;i++) {
+            var cell=new RoundedPanel { Location=new Point((i%2)*188,(i/2)*210),Size=new Size(178,200),BackColor=Card };
+            cell.Controls.Add(LabelAt(QuadrantNames[i],10,12,158,22,new Font("Segoe UI",10,FontStyle.Bold),Accent));
+            cell.Controls.Add(LabelAt(subtitles[i],10,36,158,21,new Font("Segoe UI",8),Muted));
+            quadrants[i]=new BackdropFlow { Location=new Point(7,64),Size=new Size(164,126),FlowDirection=FlowDirection.TopDown,WrapContents=false,AutoScroll=true,BackColor=Card };
+            cell.Controls.Add(quadrants[i]); matrix.Controls.Add(cell);
+        }
         if(preview) {
-            data=new TaskData(); data.Tasks.Add(new TaskItem { Text="Записать планы на день" }); data.Tasks.Add(new TaskItem { Text="Прогуляться на свежем воздухе" }); data.Tasks.Add(new TaskItem { Text="Выпить стакан воды",Done=true,CompletedAt=DateTime.Now });
+            data=new TaskData(); data.Tasks.Add(new TaskItem { Text="Записать планы на день",Urgent=true }); data.Tasks.Add(new TaskItem { Text="Прогуляться на свежем воздухе" }); data.Tasks.Add(new TaskItem { Text="Выпить стакан воды",Important=false,Done=true,CompletedAt=DateTime.Now });
         } else {
             try { data=Storage.Read(dataPath); }
             catch(Exception ex) {
@@ -158,6 +181,37 @@ public class DayTasks : Form {
         FormClosed+=delegate { if(timer!=null) timer.Dispose(); if(shadow!=null) shadow.Dispose(); };
         Round(this,22);
         if(IsGlass) { WallpaperBackdrop.Refresh(this); RefreshGlassInput(); }
+    }
+    void SwitchView(bool showMatrix) {
+        matrixView=showMatrix; list.Visible=!showMatrix; matrix.Visible=showMatrix;
+        ClientSize=new Size(410,showMatrix ? 780 : 648);
+        carryNote.Top=showMatrix ? 722 : 592; cleanupNote.Top=showMatrix ? 745 : 615;
+        listTab.BackColor=showMatrix ? Card : Accent; listTab.ForeColor=showMatrix ? Ink : Bg;
+        matrixTab.BackColor=showMatrix ? Accent : Card; matrixTab.ForeColor=showMatrix ? Bg : Ink;
+        Round(this,22);
+        if(desktop!=IntPtr.Zero) {
+            Rectangle screen=Screen.FromHandle(Handle).WorkingArea; Point origin=PointToScreen(Point.Empty);
+            if(origin.Y+Height>screen.Bottom) Top-=Math.Max(0,origin.Y+Height-screen.Bottom);
+            UpdateGlassEffects(); SavePosition();
+        }
+        if(IsGlass) RefreshGlassInput(); Invalidate(true);
+    }
+    void ShowTaskMenu(TaskItem task,Control anchor) {
+        if(readFailed) return;
+        var menu=new ContextMenuStrip { BackColor=Card,ForeColor=Ink,ShowCheckMargin=true,ShowImageMargin=false };
+        for(int i=0;i<4;i++) {
+            int target=i;
+            var item=new ToolStripMenuItem(QuadrantNames[i]) { Checked=Quadrant(task)==i };
+            item.Click+=delegate {
+                bool important=task.Important,urgent=task.Urgent;
+                task.Important=target<2; task.Urgent=target==0 || target==2;
+                if(!Save()) { task.Important=important; task.Urgent=urgent; } RefreshTasks();
+            };
+            menu.Items.Add(item);
+        }
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Удалить дело",null,delegate { int index=data.Tasks.IndexOf(task); data.Tasks.Remove(task); if(!Save()) data.Tasks.Insert(index,task); RefreshTasks(); });
+        menu.Closed+=delegate { BeginInvoke(new MethodInvoker(delegate { menu.Dispose(); })); }; menu.Show(anchor,new Point(0,anchor.Height));
     }
     void RefreshGlassInput() {
         if(input==null || !IsGlass) return;
@@ -211,6 +265,7 @@ public class DayTasks : Form {
         Palette old=palette; SuspendLayout(); RecolorControls(this,old,next); palette=next;
         SetSymbols(this);
         input.BackColor=Card; RefreshTasks(); ResumeLayout(); if(IsGlass) { WallpaperBackdrop.Refresh(this); RefreshGlassInput(); } UpdateGlassEffects(); Invalidate(true);
+        SwitchView(matrixView);
         if(desktop!=IntPtr.Zero) { try { WriteDiagnostics(Path.Combine(Path.GetDirectoryName(dataPath),"состояние.txt")); } catch { } }
     }
     void SetSymbols(Control control) { foreach(Control child in control.Controls) { if(child is SoftButton && child.Text=="+") child.ForeColor=IsGlass ? Ink : Bg; SetSymbols(child); } }
@@ -272,21 +327,32 @@ public class DayTasks : Form {
         count.Text=data.Tasks.Count==0 ? "Ваш день начинается здесь" : "Готово "+done+" из "+data.Tasks.Count;
         list.SuspendLayout(); while(list.Controls.Count>0) { var c=list.Controls[0]; list.Controls.Remove(c); c.Dispose(); }
         if(data.Tasks.Count==0) list.Controls.Add(LabelAt("Добавьте первое дело.\nДаже маленький шаг — это прогресс.",0,0,360,80,new Font("Segoe UI",11),Muted));
-        foreach(TaskItem task in OrderedTasks(data)) {
-            var row=new RoundedPanel { Size=new Size(352,68),BackColor=Card,Margin=new Padding(0,0,0,9) };
-            var check=new TaskCheck(task.Done,Card,Muted,Accent,Bg) { Location=new Point(12,20),Enabled=!readFailed };
+        foreach(TaskItem task in OrderedTasks(data)) list.Controls.Add(CreateTaskRow(task,false));
+        list.ResumeLayout();
+        for(int q=0;q<4;q++) {
+            var group=quadrants[q]; group.SuspendLayout();
+            while(group.Controls.Count>0) { var child=group.Controls[0]; group.Controls.Remove(child); child.Dispose(); }
+            foreach(TaskItem task in OrderedTasks(data)) if(Quadrant(task)==q) group.Controls.Add(CreateTaskRow(task,true));
+            if(group.Controls.Count==0) group.Controls.Add(LabelAt("Пока пусто",4,4,142,24,new Font("Segoe UI",9),Muted));
+            group.ResumeLayout();
+        }
+    }
+    Control CreateTaskRow(TaskItem task,bool compact) {
+            var row=new RoundedPanel { Size=new Size(compact ? 144 : 352,compact ? 66 : 68),BackColor=Card,Margin=new Padding(0,0,0,9) };
+            var check=new TaskCheck(task.Done,Card,Muted,Accent,Bg) { Location=new Point(compact ? 0 : 12,20),Enabled=!readFailed };
             row.Controls.Add(check);
-            var label=LabelAt(task.Text,51,12,262,45,new Font("Segoe UI",10,task.Done ? FontStyle.Strikeout : FontStyle.Regular),task.Done ? Muted : Ink); row.Controls.Add(label);
+            var label=LabelAt(task.Text,compact ? 31 : 51,12,compact ? 88 : 230,45,new Font("Segoe UI",compact ? 8.5f : 10,task.Done ? FontStyle.Strikeout : FontStyle.Regular),task.Done ? Muted : Ink); row.Controls.Add(label);
             var tooltip=new ToolTip(); tooltip.SetToolTip(label,task.Text); row.Disposed+=delegate { tooltip.Dispose(); };
             var remove=ButtonAt("×",319,20,24,28,Card,Muted); remove.Enabled=!readFailed; row.Controls.Add(remove);
+            remove.Visible=!compact;
+            var priority=ButtonAt("⋯",compact ? 120 : 287,20,24,28,Card,Muted); priority.Enabled=!readFailed; row.Controls.Add(priority);
+            priority.Click+=delegate { ShowTaskMenu(task,priority); }; tooltip.SetToolTip(priority,"Раздел матрицы и действия");
             check.Click+=delegate {
                 bool old=task.Done; DateTime oldTime=task.CompletedAt; task.Done=!task.Done; task.CompletedAt=task.Done ? DateTime.Now : DateTime.MinValue;
                 if(!Save()) { task.Done=old; task.CompletedAt=oldTime; } RefreshTasks();
             };
             remove.Click+=delegate { int index=data.Tasks.IndexOf(task); data.Tasks.Remove(task); if(!Save()) data.Tasks.Insert(index,task); RefreshTasks(); };
-            row.Tag=task.Id; list.Controls.Add(row);
-        }
-        list.ResumeLayout();
+            row.Tag=task.Id; return row;
     }
     static List<TaskItem> OrderedTasks(TaskData source) {
         var ordered=source.Tasks.FindAll(delegate(TaskItem item) { return !item.Done; });
@@ -297,7 +363,7 @@ public class DayTasks : Form {
         Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
         if(args.Length>0 && args[0]=="--self-test") return SelfTest(args[1]);
         if(args.Length>0 && args[0]=="--effects-test") return EffectsTest(args[1]);
-        if(args.Length>0 && args[0]=="--preview") { using(var f=new DayTasks(true,args.Length>2 ? args[2] : null)) { f.Show(); Application.DoEvents(); using(var bmp=new Bitmap(f.Width,f.Height)) { f.DrawToBitmap(bmp,new Rectangle(0,0,f.Width,f.Height)); bmp.Save(args[1]); } } return 0; }
+        if(args.Length>0 && args[0]=="--preview") { using(var f=new DayTasks(true,args.Length>2 ? args[2] : null)) { if(args.Length>3 && args[3]=="matrix") { f.data.Tasks.Add(new TaskItem { Text="Ответить на письмо",Important=false,Urgent=true }); f.RefreshTasks(); f.SwitchView(true); } f.Show(); Application.DoEvents(); using(var bmp=new Bitmap(f.Width,f.Height)) { f.DrawToBitmap(bmp,new Rectangle(0,0,f.Width,f.Height)); bmp.Save(args[1]); } } return 0; }
         using(var wake=new EventWaitHandle(false,EventResetMode.AutoReset,"Local\\CodexDayTasksWidgetWake")) {
             bool created;
             using(var mutex=new Mutex(true,"Local\\CodexDayTasksWidget",out created)) {
@@ -364,20 +430,29 @@ public class DayTasks : Form {
                 if((string)window.list.Controls[0].Tag!=window.data.Tasks[1].Id || (string)window.list.Controls[1].Tag!=window.data.Tasks[0].Id) throw new Exception("Completed task did not move below active task");
                 window.data.Tasks[0].Done=false; window.RefreshTasks();
                 if((string)window.list.Controls[0].Tag!=window.data.Tasks[0].Id) throw new Exception("Unchecked task did not return to active group");
+                window.data.Tasks[1].Important=false; window.data.Tasks[1].Urgent=true; window.RefreshTasks();
+                if((string)window.quadrants[0].Controls[0].Tag!=window.data.Tasks[0].Id || (string)window.quadrants[2].Controls[0].Tag!=window.data.Tasks[1].Id || (string)window.quadrants[3].Controls[0].Tag!=window.data.Tasks[2].Id) throw new Exception("Matrix routing");
+                window.SwitchView(true); if(window.ClientSize.Height!=780) throw new Exception("Matrix layout");
+                window.SwitchView(false); if(window.ClientSize.Height!=648) throw new Exception("List layout");
             }
             Directory.CreateDirectory(folder); var d=new TaskData(); DateTime today=new DateTime(2026,10,14);
-            d.Tasks.Add(new TaskItem { Text="Остаётся" }); d.Tasks.Add(new TaskItem { Text="Вчера",Done=true,CompletedAt=today.AddDays(-1).AddHours(12) });
+            d.Tasks.Add(new TaskItem { Text="Остаётся",Important=false,Urgent=true }); d.Tasks.Add(new TaskItem { Text="Вчера",Done=true,CompletedAt=today.AddDays(-1).AddHours(12) });
             if(Storage.Clean(d,today.AddHours(2).AddMinutes(59))!=0) throw new Exception("Before boundary");
             if(Storage.Clean(d,today.AddHours(3))!=1 || d.Tasks.Count!=1) throw new Exception("Boundary cleanup");
             d.Tasks.Add(new TaskItem { Text="Сегодня",Done=true,CompletedAt=today.AddHours(4) });
             if(Storage.Clean(d,today.AddHours(22))!=0) throw new Exception("Same-day completion");
             string path=Path.Combine(folder,"test.xml"); Storage.Write(path,d); var loaded=Storage.Read(path);
             if(loaded.Tasks.Count!=2 || loaded.Tasks[0].Text!="Остаётся") throw new Exception("Persistence");
+            if(loaded.Tasks[0].Important || !loaded.Tasks[0].Urgent) throw new Exception("Priority persistence");
+            using(var legacy=new StringReader("<TaskData><Tasks><TaskItem><Text>Старое дело</Text></TaskItem></Tasks></TaskData>")) {
+                var migrated=(TaskData)new XmlSerializer(typeof(TaskData)).Deserialize(legacy);
+                if(migrated.Tasks.Count!=1 || Quadrant(migrated.Tasks[0])!=1) throw new Exception("Legacy task migration");
+            }
             Storage.Write(path,loaded); if(!File.Exists(path+".bak")) throw new Exception("Backup");
             if(Storage.Clean(loaded,today.AddDays(3).AddHours(10))!=1 || loaded.Tasks[0].Done) throw new Exception("Offline rollover");
             loaded.Tasks.Add(new TaskItem { Text="Отмена отметки",Done=false,CompletedAt=today });
             if(Storage.Clean(loaded,today.AddDays(5))!=0) throw new Exception("Unchecked task");
-            File.WriteAllText(Path.Combine(folder,"test-result.txt"),"PASS: boundary, rollover, persistence, backup, offline cleanup, completed-task grouping and undo"); return 0;
+            File.WriteAllText(Path.Combine(folder,"test-result.txt"),"PASS: cleanup, persistence, completed-task grouping, matrix routing, priority persistence and legacy migration"); return 0;
         } catch(Exception ex) { File.WriteAllText(Path.Combine(folder,"test-result.txt"),ex.ToString()); return 1; }
     }
 }
