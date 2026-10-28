@@ -78,6 +78,9 @@ public class DayTasks : Form {
     Size resizeFrom,resizeTo;
     Point resizeOrigin,resizeDestination;
     bool resizeFrame;
+    ResizeSurface resizeSurface;
+    [DllImport("user32.dll")] static extern bool RedrawWindow(IntPtr hwnd,IntPtr rect,IntPtr region,uint flags);
+    [DllImport("dwmapi.dll")] static extern int DwmFlush();
     bool readFailed;
     Func<bool> saveOverride;
     IntPtr desktop;
@@ -197,25 +200,48 @@ public class DayTasks : Form {
             timer=new System.Windows.Forms.Timer { Interval=15000 };
             timer.Tick+=delegate { if(!readFailed && Storage.Clean(data,DateTime.Now)>0) { Save(); RefreshTasks(); } UpdateDate(); if(IsGlass) { WallpaperBackdrop.Refresh(this); RefreshGlassInput(); Invalidate(true); } }; timer.Start();
         }
-        FormClosed+=delegate { if(timer!=null) timer.Dispose(); if(resizeTimer!=null) resizeTimer.Dispose(); if(shadow!=null) shadow.Dispose(); };
+        FormClosed+=delegate { if(timer!=null) timer.Dispose(); if(resizeTimer!=null) resizeTimer.Dispose(); if(resizeSurface!=null) resizeSurface.Dispose(); if(shadow!=null) shadow.Dispose(); };
         Round(this,22);
         if(IsGlass) { WallpaperBackdrop.Refresh(this); RefreshGlassInput(); }
     }
     static double ResizeEase(double progress) { double t=Math.Max(0,Math.Min(1,progress)); return t*t*t*(t*(t*6-15)+10); }
     void SwitchView(bool showMatrix,bool animate=false) {
         if(resizeTimer!=null) resizeTimer.Stop();
+        ResizeSurface previousSurface=resizeSurface;
+        Size visualSize=previousSurface==null ? ClientSize : previousSurface.FrameSize;
+        Point visualLocation=previousSurface==null ? Location : previousSurface.FrameLocation;
+        bool useSurface=animate && Visible && desktop!=IntPtr.Zero;
+        Bitmap initial=useSurface ? (previousSurface==null ? CaptureView() : previousSurface.CaptureFrame()) : null;
+        resizeSurface=null;
         matrixView=showMatrix; list.Visible=!showMatrix; matrix.Visible=showMatrix;
         input.Parent.Visible=!showMatrix; entryHint.Visible=!showMatrix; count.Visible=!showMatrix;
         listTab.BackColor=showMatrix ? Card : Accent; listTab.ForeColor=showMatrix || IsGlass ? Ink : Bg;
         matrixTab.BackColor=showMatrix ? Accent : Card; matrixTab.ForeColor=!showMatrix || IsGlass ? Ink : Bg;
         ((SoftButton)listTab).Emphasized=!showMatrix; ((SoftButton)matrixTab).Emphasized=showMatrix;
-        resizeFrom=ClientSize; resizeTo=new Size(showMatrix ? 600 : 410,showMatrix ? 724 : 648);
-        resizeOrigin=Location; resizeDestination=Location;
+        resizeFrom=visualSize; resizeTo=new Size(showMatrix ? 600 : 410,showMatrix ? 724 : 648);
+        resizeOrigin=visualLocation; resizeDestination=visualLocation;
         if(desktop!=IntPtr.Zero) {
             Rectangle screen=Screen.FromHandle(Handle).WorkingArea; Point origin=PointToScreen(Point.Empty);
             resizeDestination.Offset(-Math.Max(0,origin.X+resizeTo.Width-screen.Right),-Math.Max(0,origin.Y+resizeTo.Height-screen.Bottom));
         }
-        if(!animate || !Visible || resizeFrom==resizeTo) { ApplyResizeFrame(1); FinishResize(); return; }
+        if(!animate || !Visible || resizeFrom==resizeTo) {
+            if(initial!=null) initial.Dispose(); ApplyResizeFrame(1); FinishResize(); if(previousSurface!=null) previousSurface.Dispose(); return;
+        }
+        if(useSurface) {
+            try {
+                resizeSurface=new ResizeSurface(desktop,initial); initial=null;
+                resizeSurface.Present(resizeFrom,resizeOrigin,0,IsGlass ? glassAlpha : (byte)255,Bg);
+                SetWindowLong(Handle,-20,GetWindowLong(Handle,-20)|0x80000);
+                if(!SetLayeredWindowAttributes(Handle,0,0,2)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+                ApplyLiveResizeFrame(1,false);
+                resizeSurface.SetTarget(CaptureView());
+                if(shadow!=null) shadow.Update(resizeSurface.Handle,desktop,resizeFrom.Width,resizeFrom.Height);
+            } catch {
+                if(initial!=null) initial.Dispose(); ApplyLiveResizeFrame(1,false); FinishResize();
+                if(previousSurface!=null) previousSurface.Dispose(); return;
+            }
+        }
+        if(previousSurface!=null) previousSurface.Dispose();
         if(resizeTimer==null) {
             resizeTimer=new System.Windows.Forms.Timer { Interval=15 };
             resizeTimer.Tick+=delegate {
@@ -226,7 +252,22 @@ public class DayTasks : Form {
         }
         resizeClock.Restart(); resizeTimer.Start(); Invalidate(true);
     }
+    Bitmap CaptureView() {
+        PerformLayout();
+        var image=new Bitmap(Width,Height,System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+        try { DrawToBitmap(image,ClientRectangle); return image; } catch { image.Dispose(); throw; }
+    }
     void ApplyResizeFrame(double progress) {
+        if(resizeSurface!=null) {
+            Size size=new Size((int)Math.Round(resizeFrom.Width+(resizeTo.Width-resizeFrom.Width)*progress),(int)Math.Round(resizeFrom.Height+(resizeTo.Height-resizeFrom.Height)*progress));
+            Point position=new Point((int)Math.Round(resizeOrigin.X+(resizeDestination.X-resizeOrigin.X)*progress),(int)Math.Round(resizeOrigin.Y+(resizeDestination.Y-resizeOrigin.Y)*progress));
+            resizeSurface.Present(size,position,progress,IsGlass ? glassAlpha : (byte)255,Bg);
+            if(shadow!=null) shadow.Update(resizeSurface.Handle,desktop,size.Width,size.Height);
+            return;
+        }
+        ApplyLiveResizeFrame(progress,true);
+    }
+    void ApplyLiveResizeFrame(double progress,bool updateShadow) {
         resizeFrame=true; SuspendLayout();
         try {
             ClientSize=new Size((int)Math.Round(resizeFrom.Width+(resizeTo.Width-resizeFrom.Width)*progress),(int)Math.Round(resizeFrom.Height+(resizeTo.Height-resizeFrom.Height)*progress));
@@ -234,12 +275,16 @@ public class DayTasks : Form {
             carryNote.Top=ClientSize.Height-(matrixView ? 58 : 56); cleanupNote.Top=ClientSize.Height-33;
             Round(this,22);
         } finally { ResumeLayout(true); resizeFrame=false; }
-        if(desktop!=IntPtr.Zero && shadow!=null) shadow.Update(Handle,desktop,Width,Height);
+        if(updateShadow && desktop!=IntPtr.Zero && shadow!=null) shadow.Update(Handle,desktop,Width,Height);
         if(IsGlass) RefreshGlassInput(); Invalidate(true);
     }
     void FinishResize() {
         resizeClock.Stop();
-        if(desktop!=IntPtr.Zero) { UpdateGlassEffects(); SavePosition(); }
+        if(desktop!=IntPtr.Zero) {
+            UpdateGlassEffects(); RedrawWindow(Handle,IntPtr.Zero,IntPtr.Zero,0x0185);
+            DwmFlush(); SavePosition();
+        }
+        if(resizeSurface!=null) { resizeSurface.Dispose(); resizeSurface=null; }
     }
     void AddMatrixTask(int target,TextBox draft) {
         string text=draft.Text.Trim(); if(readFailed || text.Length==0) return;
@@ -466,8 +511,15 @@ public class DayTasks : Form {
                 uint key,flags; byte alpha;
                 if(!GetLayeredWindowAttributes(window.Handle,out key,out alpha,out flags) || alpha!=220) throw new Exception("Glass opacity was not applied");
                 if(window.shadow==null || !window.shadow.Visible || !window.shadow.AlignedWith(window.Handle)) throw new Exception("Shadow visibility or position");
-                window.SwitchView(true,true); WaitForResize(window);
-                if(window.Width!=600 || !window.shadow.AlignedWith(window.Handle)) throw new Exception("Expanded matrix shadow layout");
+                window.SwitchView(true,true);
+                if(window.resizeSurface==null) throw new Exception("Resize must use an atomic frame surface");
+                using(var painted=window.CaptureView()) {
+                    int bright=0;
+                    for(int y=22;y<58;y++) for(int x=22;x<240;x++) { Color pixel=painted.GetPixel(x,y); if(pixel.R>210 && pixel.G>210 && pixel.B>210) bright++; }
+                    if(bright<30) throw new Exception("Prepared resize frame must contain fully painted text");
+                }
+                WaitForResize(window);
+                if(window.Width!=600 || window.resizeSurface!=null || !window.shadow.AlignedWith(window.Handle)) throw new Exception("Expanded matrix shadow layout");
                 window.SwitchView(false,true); WaitForResize(window);
                 if(window.Width!=410 || !window.shadow.AlignedWith(window.Handle)) throw new Exception("Compact list shadow layout");
                 window.SwitchView(true,true); Application.DoEvents(); window.SwitchView(false,true); WaitForResize(window);

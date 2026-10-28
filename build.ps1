@@ -15,7 +15,8 @@ $compileArgs = @(
     '/reference:System.Windows.Forms.dll', '/reference:System.Drawing.dll',
     (Join-Path $PSScriptRoot 'src\DayTasks.cs'),
     (Join-Path $PSScriptRoot 'src\DesktopShadow.cs'),
-    (Join-Path $PSScriptRoot 'src\WallpaperBackdrop.cs')
+    (Join-Path $PSScriptRoot 'src\WallpaperBackdrop.cs'),
+    (Join-Path $PSScriptRoot 'src\ResizeSurface.cs')
 )
 & $compiler @compileArgs
 if ($LASTEXITCODE -ne 0) { throw 'Сборка не удалась.' }
