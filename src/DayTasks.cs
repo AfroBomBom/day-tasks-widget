@@ -171,11 +171,13 @@ public class DayTasks : Form {
             int target=i;
             var cell=new RoundedPanel { Location=new Point((i%2)*283,(i/2)*250),Size=new Size(273,240),BackColor=Card };
             cell.Controls.Add(LabelAt(QuadrantNames[i],10,12,253,22,new Font("Segoe UI",10,FontStyle.Bold),Accent));
-            quadrants[i]=new BackdropFlow { Location=new Point(7,48),Size=new Size(259,137),FlowDirection=FlowDirection.TopDown,WrapContents=false,AutoScroll=true,BackColor=Card };
+            quadrants[i]=new BackdropFlow { Location=new Point(7,48),Size=new Size(259,129),FlowDirection=FlowDirection.TopDown,WrapContents=false,AutoScroll=true,BackColor=Card };
             cell.Controls.Add(quadrants[i]); matrix.Controls.Add(cell);
-            cell.Controls.Add(LabelAt("Новое задание · Enter",12,187,249,18,new Font("Segoe UI",8),Muted));
-            var draftBox=new RoundedPanel { Location=new Point(10,207),Size=new Size(253,27),BackColor=Bg }; cell.Controls.Add(draftBox);
-            var draft=new TextBox { Location=new Point(8,4),Size=new Size(237,22),BackColor=Bg,ForeColor=Ink,BorderStyle=BorderStyle.None,MaxLength=500,Font=new Font("Segoe UI",9) }; draftBox.Controls.Add(draft);
+            var draftHint=LabelAt("Новое задание · Enter",12,179,249,22,new Font("Segoe UI",8),Muted);
+            draftHint.TextAlign=ContentAlignment.MiddleCenter; cell.Controls.Add(draftHint);
+            var draftBox=new RoundedPanel { Location=new Point(12,203),Size=new Size(249,30),BackColor=Bg }; cell.Controls.Add(draftBox);
+            var draft=new TextBox { Location=new Point(12,0),Size=new Size(225,22),BackColor=Bg,ForeColor=Ink,BorderStyle=BorderStyle.None,MaxLength=500,Font=new Font("Segoe UI",9),TextAlign=HorizontalAlignment.Center }; draftBox.Controls.Add(draft);
+            draft.Top=(draftBox.ClientSize.Height-draft.Height)/2;
             draft.KeyDown+=delegate(object sender,KeyEventArgs e) { if(e.KeyCode==Keys.Enter) { e.SuppressKeyPress=true; AddMatrixTask(target,draft); } };
         }
         if(preview) {
