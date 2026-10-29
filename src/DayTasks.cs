@@ -168,10 +168,15 @@ public class DayTasks : Form {
         listTab.Click+=delegate { SwitchView(false,true); }; matrixTab.Click+=delegate { SwitchView(true,true); };
         matrix=new BackdropPanel { Location=new Point(22,154),Size=new Size(556,490),BackColor=Bg,Visible=false }; Controls.Add(matrix);
         for(int i=0;i<4;i++) {
+            int target=i;
             var cell=new RoundedPanel { Location=new Point((i%2)*283,(i/2)*250),Size=new Size(273,240),BackColor=Card };
             cell.Controls.Add(LabelAt(QuadrantNames[i],10,12,253,22,new Font("Segoe UI",10,FontStyle.Bold),Accent));
-            quadrants[i]=new BackdropFlow { Location=new Point(7,48),Size=new Size(259,182),FlowDirection=FlowDirection.TopDown,WrapContents=false,AutoScroll=true,BackColor=Card };
+            quadrants[i]=new BackdropFlow { Location=new Point(7,48),Size=new Size(259,137),FlowDirection=FlowDirection.TopDown,WrapContents=false,AutoScroll=true,BackColor=Card };
             cell.Controls.Add(quadrants[i]); matrix.Controls.Add(cell);
+            cell.Controls.Add(LabelAt("Новое задание · Enter",12,187,249,18,new Font("Segoe UI",8),Muted));
+            var draftBox=new RoundedPanel { Location=new Point(10,207),Size=new Size(253,27),BackColor=Bg }; cell.Controls.Add(draftBox);
+            var draft=new TextBox { Location=new Point(8,4),Size=new Size(237,22),BackColor=Bg,ForeColor=Ink,BorderStyle=BorderStyle.None,MaxLength=500,Font=new Font("Segoe UI",9) }; draftBox.Controls.Add(draft);
+            draft.KeyDown+=delegate(object sender,KeyEventArgs e) { if(e.KeyCode==Keys.Enter) { e.SuppressKeyPress=true; AddMatrixTask(target,draft); } };
         }
         if(preview) {
             data=new TaskData(); data.Tasks.Add(new TaskItem { Text="Записать планы на день",Urgent=true,InMatrix=true }); data.Tasks.Add(new TaskItem { Text="Прогуляться на свежем воздухе",InMatrix=true }); data.Tasks.Add(new TaskItem { Text="Выпить стакан воды",Important=false,InMatrix=true,Done=true,CompletedAt=DateTime.Now });
@@ -274,6 +279,12 @@ public class DayTasks : Form {
             DwmFlush(); SavePosition();
         }
         if(resizeSurface!=null) { resizeSurface.Dispose(); resizeSurface=null; }
+    }
+    void AddMatrixTask(int target,TextBox draft) {
+        string text=draft.Text.Trim(); if(readFailed || text.Length==0) return;
+        var task=new TaskItem { Text=text }; SetQuadrant(task,target); data.Tasks.Add(task);
+        if(!Save()) { data.Tasks.Remove(task); return; }
+        draft.Clear(); RefreshTasks(); draft.Focus();
     }
     void AssignMatrix(TaskItem task,int target) {
         if(readFailed) return;
@@ -417,7 +428,7 @@ public class DayTasks : Form {
             var group=quadrants[q]; group.SuspendLayout();
             while(group.Controls.Count>0) { var child=group.Controls[0]; group.Controls.Remove(child); child.Dispose(); }
             foreach(TaskItem task in OrderedTasks(data)) if(Quadrant(task)==q) group.Controls.Add(CreateTaskRow(task,true));
-            if(group.Controls.Count==0) group.Controls.Add(LabelAt("Выберите дела через ⋯ в списке",4,4,240,44,new Font("Segoe UI",9),Muted));
+            if(group.Controls.Count==0) group.Controls.Add(LabelAt("Введите задание ниже",4,4,240,44,new Font("Segoe UI",9),Muted));
             group.ResumeLayout();
         }
     }
@@ -552,6 +563,14 @@ public class DayTasks : Form {
                 if(Quadrant(chosen)!=-1 || window.list.Controls.Count!=before) throw new Exception("Remove from matrix must preserve task");
                 window.saveOverride=delegate { return false; }; window.AssignMatrix(chosen,2);
                 if(window.data.Tasks.Count!=before || Quadrant(chosen)!=-1) throw new Exception("Failed save must roll back matrix changes");
+                using(var draft=new TextBox { Text="  Новое дело  " }) {
+                    window.saveOverride=delegate { return true; }; window.AddMatrixTask(1,draft);
+                    if(window.data.Tasks.Count!=before+1 || Quadrant(window.data.Tasks[before])!=1 || window.data.Tasks[before].Text!="Новое дело" || draft.Text!="") throw new Exception("Matrix input must add to selected quadrant");
+                    window.AddMatrixTask(1,draft);
+                    if(window.data.Tasks.Count!=before+1) throw new Exception("Empty matrix input must be ignored");
+                    window.saveOverride=delegate { return false; }; draft.Text="Черновик"; window.AddMatrixTask(2,draft);
+                    if(window.data.Tasks.Count!=before+1 || draft.Text!="Черновик") throw new Exception("Failed save must preserve matrix draft");
+                }
             }
             Directory.CreateDirectory(folder); var d=new TaskData(); DateTime today=new DateTime(2026,10,14);
             d.Tasks.Add(new TaskItem { Text="Остаётся",Important=false,Urgent=true,InMatrix=true }); d.Tasks.Add(new TaskItem { Text="Вчера",Done=true,CompletedAt=today.AddDays(-1).AddHours(12) });
